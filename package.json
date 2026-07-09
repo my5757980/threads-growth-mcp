@@ -1,0 +1,20 @@
+{
+  "name": "@mj4384963/threads-growth-mcp",
+  "version": "1.0.0",
+  "description": "Threads (Meta) MCP Server — post, reply, and read insights via the official Threads API (free)",
+  "main": "index.js",
+  "type": "module",
+  "bin": {
+    "threads-growth-mcp": "index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": ["mcp", "mcp-server", "threads", "meta", "claude", "automation", "social-media"],
+  "author": "mj4384963",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "dotenv": "^16.0.0"
+  }
+}
