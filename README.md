@@ -1,15 +1,15 @@
 # threads-growth-mcp
 
-Custom **MCP (Model Context Protocol) server** for Threads (Meta). It posts, replies, quotes, reposts, searches, manages replies and reads insights through the official, free Threads API.
+Custom **MCP (Model Context Protocol) server** for Threads (Meta). It posts (text, polls, GIFs, long text, spoilers, ghost posts, media), replies, quotes, reposts, searches, manages replies and reads insights through the official, free Threads API.
 
 Published on npm: [`@mj4384963/threads-growth-mcp`](https://www.npmjs.com/package/@mj4384963/threads-growth-mcp)
 
-## 16 Tools
+## 20 Tools
 
 | Tool | What it does | Permission |
 |------|-------------|------------|
-| `post_to_threads` | Publish a text thread, optionally with a topic tag or link card | `threads_content_publish` |
-| `post_with_media` | Publish an image or video post, or a carousel of 2-20, from public URLs | `threads_content_publish` |
+| `post_to_threads` | Publish a text thread, optionally with a topic tag, link card, poll (2-4 options), GIPHY GIF, long text attachment (up to 10,000 characters), phrase spoilers, or as a ghost post that Threads archives after 24 hours | `threads_content_publish` |
+| `post_with_media` | Publish an image or video post, or a carousel of 2-20, from public URLs, with optional alt text per item and a spoiler blur | `threads_content_publish` |
 | `publish_container` | Publish a video that was still processing when `post_with_media` returned | `threads_content_publish` |
 | `reply_to_thread` | Reply to a thread or reply | `threads_content_publish`; for someone else's thread also `threads_keyword_search` or `threads_manage_mentions` |
 | `quote_thread` | Quote a thread with your own text | `threads_content_publish` |
@@ -19,14 +19,28 @@ Published on npm: [`@mj4384963/threads-growth-mcp`](https://www.npmjs.com/packag
 | `get_replies` | Read a thread's replies, top-level only or the whole conversation | `threads_read_replies` |
 | `hide_reply` | Hide or unhide a reply to your thread | `threads_manage_replies` |
 | `get_mentions` | Posts where people @mentioned you | `threads_manage_mentions` |
+| `get_my_replies` | The replies you have written, newest first | `threads_read_replies` |
 | `search_threads` | Keyword or topic-tag search, top or recent | `threads_keyword_search` |
+| `lookup_profile` | Another public profile by exact username: bio, followers, and its views, likes, quotes and reposts over the past 7 days | `threads_profile_discovery` |
+| `search_locations` | Find a place to tag; pass its ID as `location_id` | `threads_location_tagging` |
 | `get_my_profile` | Username, name, bio, verified badge and follower count | `threads_basic`, `threads_manage_insights` |
 | `get_my_stats` | Account totals for the last N days (profile views, likes, replies, reposts, quotes, link clicks), followers now, and an optional country/city/age/gender breakdown | `threads_manage_insights` |
-| `get_thread_insights` | Views, likes, replies, reposts, quotes for one thread | `threads_manage_insights` |
+| `get_thread_insights` | Views, likes, replies, reposts, quotes and shares for one thread | `threads_manage_insights` |
+| `get_poll_results` | Each answer's share, total votes and closing time for one of your polls | `threads_basic` |
 | `check_token` | Whether the token is valid, when it expires, which permissions it has, and the last 24 hours' post/reply/delete quota. It never prints the token | `threads_basic` |
 
+**Options on every new post** (`post_to_threads`, `post_with_media`):
+- `reply_control`: who may reply (`everyone`, `accounts_you_follow`, `mentioned_only`, `parent_post_author_only`, `followers_only`), and `reply_approvals` to approve replies before they show.
+- `countries`: show the post only in these countries (2-letter codes such as `PK`, `US`).
+- `location_id`: a place from `search_locations` (needs `threads_location_tagging`).
+- `share_to_instagram`: also share to your linked Instagram (needs `threads_share_to_instagram`).
+
+**Post rules the server checks before sending:** a poll has 2-4 options of 1-25 characters and cannot carry a long text attachment; a ghost post carries only text and text spoilers; one link attachment per post; at most 10 spoilers; alt text up to 1,000 characters.
+
 **What the API allows**
-- **Follow:** the official API has no follow or discover endpoints for people.
+- **Follow:** the official API has no follow endpoint.
+- **Other profiles:** `lookup_profile` needs `threads_profile_discovery`. With standard access Meta only lets it find @meta, @threads, @instagram and @facebook; other public profiles (100+ followers) need advanced access. 1,000 lookups a day.
+- **Locations:** until Meta approves `threads_location_tagging`, every location search returns results for Menlo Park only. 500 searches a day.
 - **Replying to others:** under your own threads, replies always work. Replying to someone else's thread needs `threads_keyword_search` or `threads_manage_mentions`. Meta lets an app reply to, quote and repost public posts it has recently found through search, so find them with `search_threads` or `get_mentions` first.
 - **Search:** until Meta approves your app for `threads_keyword_search`, it only searches your own posts.
 - **Mentions:** until your app has advanced access to `threads_manage_mentions`, it shows only mentions by your app's testers.

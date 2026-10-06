@@ -258,6 +258,7 @@ test("check_token shows validity, expiry, permissions and quota, never the token
   const text = textOf(await threads(fetch, { clock })("check_token", {}));
   assert.match(text, /✅ Token is valid\n⏳ Expires: 2026-11-20 \(in 54 days\)/);
   assert.match(text, /Missing: threads_read_replies \(get_replies\); threads_manage_replies \(hide_reply\)/);
+  assert.match(text, /threads_profile_discovery \(lookup_profile\)/);
   assert.match(text, /posts 4\/250, replies 1\/1000, deletes 0\/100/);
   assert.ok(!text.includes(TOKEN), "the token is never printed");
   assert.deepEqual(fetch.calls[0], { method: "GET", path: "/debug_token", params: { access_token: TOKEN, input_token: TOKEN } });
@@ -284,10 +285,139 @@ test("a non-JSON failure is reported by status and does not leak the token", asy
   assert.ok(!textOf(result).includes(TOKEN));
 });
 
-test("get_thread_insights still reads a post's lifetime metrics", async () => {
-  const fetch = fakeFetch({ data: [{ name: "views", values: [{ value: 99 }] }, { name: "likes", values: [{ value: 5 }] }] });
-  assert.equal(textOf(await threads(fetch)("get_thread_insights", { thread_id: "555" })), "views: 99\nlikes: 5");
-  assert.deepEqual(fetch.calls[0].params, { access_token: TOKEN, metric: "views,likes,replies,reposts,quotes" });
+test("get_thread_insights reads a post's lifetime metrics, shares included", async () => {
+  const fetch = fakeFetch({ data: [{ name: "views", values: [{ value: 99 }] }, { name: "likes", values: [{ value: 5 }] }, { name: "shares", values: [{ value: 2 }] }] });
+  assert.equal(textOf(await threads(fetch)("get_thread_insights", { thread_id: "555" })), "views: 99\nlikes: 5\nshares: 2");
+  assert.deepEqual(fetch.calls[0].params, { access_token: TOKEN, metric: "views,likes,replies,reposts,quotes,shares" });
+});
+
+test("post_to_threads adds a poll, reply limits, a location, countries and Instagram sharing as container parameters", async () => {
+  const fetch = fakeFetch({ id: "c1" }, FINISHED, { id: "post1" });
+  const result = await threads(fetch)("post_to_threads", {
+    text: "Which do you use?", poll_options: ["Claude", " GPT ", "Gemini"],
+    reply_control: "FOLLOWERS_ONLY", reply_approvals: true, location_id: "12345", countries: ["pk", "US"], share_to_instagram: true
+  });
+  assert.equal(result.isError, undefined, textOf(result));
+  assert.deepEqual(fetch.calls[0].params, {
+    access_token: TOKEN, media_type: "TEXT", text: "Which do you use?",
+    poll_attachment: JSON.stringify({ option_a: "Claude", option_b: "GPT", option_c: "Gemini" }),
+    reply_control: "followers_only", enable_reply_approvals: "true", location_id: "12345",
+    allowlisted_country_codes: "PK,US", crossreshare_to_ig: "true"
+  });
+});
+
+test("post_to_threads attaches a GIPHY GIF, a long text with its own link, and phrase spoilers", async () => {
+  const fetch = fakeFetch({ id: "c1" }, FINISHED, { id: "post1" });
+  const result = await threads(fetch)("post_to_threads", {
+    text: "The twist: Bruce is Batman", gif_id: "abc123", long_text: "Full review...", long_text_link: "https://blog.dev/r", spoiler_phrases: ["Bruce is Batman"]
+  });
+  assert.equal(result.isError, undefined, textOf(result));
+  const p = fetch.calls[0].params;
+  assert.equal(p.gif_attachment, JSON.stringify({ gif_id: "abc123", provider: "GIPHY" }));
+  assert.equal(p.text_attachment, JSON.stringify({ plaintext: "Full review...", link_attachment_url: "https://blog.dev/r" }));
+  assert.equal(p.text_entities, JSON.stringify([{ entity_type: "SPOILER", offset: 11, length: 15 }]));
+});
+
+test("a ghost post is flagged and reported as archived after 24 hours", async () => {
+  const fetch = fakeFetch({ id: "c1" }, FINISHED, { id: "g1" });
+  const result = await threads(fetch)("post_to_threads", { text: "Gone tomorrow", ghost: true });
+  assert.match(textOf(result), /Ghost post published \(Threads archives it after 24 hours\)!\nID: g1/);
+  assert.equal(fetch.calls[0].params.is_ghost_post, "true");
+});
+
+test("post_to_threads checks Threads' rules before sending anything", async () => {
+  const fetch = fakeFetch();
+  for (const [args, msg] of [
+    [{ poll_options: ["only"] }, /2 to 4 options, not 1/],
+    [{ poll_options: ["A", "x".repeat(26)] }, /1 to 25 characters/],
+    [{ poll_options: ["A", "B"], long_text: "more" }, /long text attachment on a post with a poll/],
+    [{ long_text: "more", long_text_link: "https://a.dev", link: "https://b.dev" }, /link or long_text_link, not both/],
+    [{ long_text: "x".repeat(10001) }, /1 to 10,000 characters/],
+    [{ spoiler_phrases: ["not here"] }, /spoiler "not here" is not in the post text/],
+    [{ spoiler_phrases: Array.from({ length: 11 }, () => "Hi") }, /at most 10 spoilers/],
+    [{ ghost: true, poll_options: ["A", "B"] }, /ghost post can carry only text/],
+    [{ reply_control: "nobody" }, /reply_control must be one of/],
+    [{ countries: ["Pakistan"] }, /2-letter codes.*not "PAKISTAN"/]
+  ]) {
+    const result = await threads(fetch)("post_to_threads", { text: "Hi there", ...args });
+    assert.equal(result.isError, true, JSON.stringify(args));
+    assert.match(textOf(result), msg);
+  }
+  assert.equal(fetch.calls.length, 0);
+});
+
+test("post_with_media puts alt text on each item and the spoiler and reply options on the post itself", async () => {
+  const single = fakeFetch({ id: "c1" }, FINISHED, { id: "p1" });
+  await threads(single)("post_with_media", {
+    media_urls: ["https://cdn.example.com/a.png"], text: "Pic", alt_texts: ["A cat"], spoiler: true, reply_control: "mentioned_only"
+  });
+  assert.deepEqual(single.calls[0].params, {
+    access_token: TOKEN, media_type: "IMAGE", image_url: "https://cdn.example.com/a.png", alt_text: "A cat", text: "Pic",
+    is_spoiler_media: "true", reply_control: "mentioned_only"
+  });
+
+  const fetch = fakeFetch({ id: "k1" }, { id: "k2" }, { status: "FINISHED" }, { status: "FINISHED" }, { id: "car" }, { status: "FINISHED" }, { id: "p2" });
+  await threads(fetch)("post_with_media", {
+    media_urls: ["https://cdn.example.com/a.jpg", "https://cdn.example.com/b.jpg"], alt_texts: ["", "Second"], countries: "pk,gb"
+  });
+  assert.equal(fetch.calls[0].params.alt_text, undefined);
+  assert.equal(fetch.calls[1].params.alt_text, "Second");
+  assert.equal(fetch.calls[0].params.allowlisted_country_codes, undefined, "options go on the carousel, not on its items");
+  assert.equal(fetch.calls[4].params.allowlisted_country_codes, "PK,GB");
+});
+
+test("post_with_media refuses an alt text over 1,000 characters before calling Threads", async () => {
+  const fetch = fakeFetch();
+  const result = await threads(fetch)("post_with_media", { media_urls: ["https://cdn.example.com/a.png"], alt_texts: ["x".repeat(1001)] });
+  assert.equal(result.isError, true);
+  assert.match(textOf(result), /at most 1,000 characters/);
+  assert.equal(fetch.calls.length, 0);
+});
+
+test("get_my_replies lists the replies you wrote", async () => {
+  const fetch = fakeFetch({ data: [{ id: "r9", text: "Agreed!", timestamp: "t", permalink: "https://www.threads.com/@me/post/z" }] });
+  assert.match(textOf(await threads(fetch)("get_my_replies", { limit: 5 })), /Agreed![\s\S]*ID: r9/);
+  assert.deepEqual(fetch.calls[0], { method: "GET", path: `/${UID}/replies`, params: { access_token: TOKEN, fields: "id,text,permalink,timestamp", limit: "5" } });
+});
+
+test("lookup_profile reads another public profile by exact username", async () => {
+  const fetch = fakeFetch({
+    username: "threads", name: "Threads", biography: "Say more", follower_count: 5000000,
+    likes_count: 10, quotes_count: 2, reposts_count: 3, views_count: 99, is_verified: true
+  });
+  const text = textOf(await threads(fetch)("lookup_profile", { username: "@threads" }));
+  assert.match(text, /@threads \(Threads\) ✔️ verified\n📝 Say more\n👥 Followers: 5000000\n📈 Past 7 days: views 99, likes 10, quotes 2, reposts 3/);
+  assert.deepEqual(fetch.calls[0], { method: "GET", path: "/profile_lookup", params: { access_token: TOKEN, username: "threads" } });
+});
+
+test("search_locations searches by name or by coordinates, and needs one of them", async () => {
+  const fetch = fakeFetch({ data: [{ id: "L1", name: "Packages Mall", address: "Walton Rd", city: "Lahore", country: "PK" }] });
+  assert.match(textOf(await threads(fetch)("search_locations", { query: "Packages Mall" })), /📍 Packages Mall \(Walton Rd, Lahore, PK\)\nID: L1/);
+  assert.deepEqual(fetch.calls[0].params, { access_token: TOKEN, q: "Packages Mall", fields: "id,name,address,city,country" });
+
+  const near = fakeFetch({ data: [] });
+  assert.match(textOf(await threads(near)("search_locations", { latitude: 31.47, longitude: 74.38 })), /No places found/);
+  assert.equal(near.calls[0].params.latitude, "31.47");
+  assert.equal(near.calls[0].params.longitude, "74.38");
+
+  const none = fakeFetch();
+  const refused = await threads(none)("search_locations", { latitude: 31.47 });
+  assert.equal(refused.isError, true);
+  assert.equal(none.calls.length, 0);
+});
+
+test("get_poll_results shows each answer's share, the total and the closing time", async () => {
+  const fetch = fakeFetch({ id: "p1", text: "Which do you use?", poll_attachment: {
+    option_a: "Claude", option_b: "GPT", option_a_votes_percentage: 0.75, option_b_votes_percentage: 0.25,
+    total_votes: 8, expiration_timestamp: "2026-10-07T10:00:00+0000"
+  } });
+  assert.equal(textOf(await threads(fetch)("get_poll_results", { thread_id: "p1" })), [
+    "📊 Which do you use?", "• Claude: 75%", "• GPT: 25%", "🗳️ Total votes: 8", "⏰ Voting closes: 2026-10-07T10:00:00+0000"
+  ].join("\n"));
+  assert.match(fetch.calls[0].params.fields, /^id,text,poll_attachment\{option_a,/);
+
+  const plain = fakeFetch({ id: "p2", text: "no poll" });
+  assert.match(textOf(await threads(plain)("get_poll_results", { thread_id: "p2" })), /p2 has no poll/);
 });
 
 test("an unknown tool is an error", async () => {

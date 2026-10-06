@@ -1,7 +1,7 @@
 {
   "name": "@mj4384963/threads-growth-mcp",
-  "version": "1.1.0",
-  "description": "Threads (Meta) MCP Server — post text, images, videos and carousels, reply, quote, repost, search, manage replies and read insights via the official Threads API (free)",
+  "version": "1.2.0",
+  "description": "Threads (Meta) MCP Server — post text, polls, GIFs, long text, spoilers, ghost posts, images, videos and carousels, reply, quote, repost, search, look up profiles, manage replies and read insights via the official Threads API (free)",
   "main": "index.js",
   "type": "module",
   "bin": {
@@ -11,7 +11,15 @@
     "start": "node index.js",
     "test": "node --test"
   },
-  "keywords": ["mcp", "mcp-server", "threads", "meta", "claude", "automation", "social-media"],
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "threads",
+    "meta",
+    "claude",
+    "automation",
+    "social-media"
+  ],
   "author": "mj4384963",
   "license": "MIT",
   "engines": {

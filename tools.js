@@ -14,21 +14,41 @@ const SCOPES = {
   threads_manage_insights: "get_my_stats, followers in get_my_profile, get_thread_insights",
   threads_keyword_search: "search_threads beyond your own posts, replying to other people's threads",
   threads_manage_mentions: "get_mentions, replying to other people's threads",
-  threads_delete: "delete_thread"
+  threads_delete: "delete_thread",
+  threads_location_tagging: "search_locations, location_id on posts",
+  threads_profile_discovery: "lookup_profile",
+  threads_share_to_instagram: "share_to_instagram on posts"
 };
 const THREAD_ID = { type: "string", description: "The post's media ID, as get_my_threads, search_threads, get_replies and get_mentions print it" };
 const LIMIT = max => ({ type: "number", description: `How many to show (default 25, max ${max})` });
+const REPLY_CONTROLS = ["everyone", "accounts_you_follow", "mentioned_only", "parent_post_author_only", "followers_only"];
+const POLL_FIELDS = "id,text,poll_attachment{option_a,option_b,option_c,option_d,option_a_votes_percentage,option_b_votes_percentage,option_c_votes_percentage,option_d_votes_percentage,total_votes,expiration_timestamp}";
+// options every new post can take
+const POST_OPTIONS = {
+  reply_control: { type: "string", enum: REPLY_CONTROLS, description: "Optional: who may reply (default everyone)" },
+  reply_approvals: { type: "boolean", description: "true = replies wait for your approval before anyone else sees them" },
+  location_id: { type: "string", description: "Optional place ID from search_locations (needs the threads_location_tagging permission)" },
+  countries: { type: "array", items: { type: "string" }, description: "Optional: show the post only in these countries (2-letter codes such as PK, US, GB)" },
+  share_to_instagram: { type: "boolean", description: "true = also share the post to your linked Instagram (needs the threads_share_to_instagram permission)" }
+};
 
 export const TOOLS = [
   {
     name: "post_to_threads",
-    description: "Publish a new text post on Threads",
+    description: "Publish a new text post on Threads. Optionally add a poll, a GIF, a long text attachment, spoilers, reply limits, a location or a country limit, or make it a ghost post that Threads archives after 24 hours",
     inputSchema: {
       type: "object",
       properties: {
         text: { type: "string", description: "The post text (max 500 characters; an emoji counts as its UTF-8 bytes)" },
         topic_tag: { type: "string", description: "Optional topic, 1-50 characters without periods or ampersands; helps people find the post" },
-        link: { type: "string", description: "Optional URL to show as a link preview card" }
+        link: { type: "string", description: "Optional URL to show as a link preview card" },
+        poll_options: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 4, description: "Optional poll: 2 to 4 answers, each 1-25 characters" },
+        gif_id: { type: "string", description: "Optional GIPHY GIF ID to attach (GIPHY is the only GIF provider Threads accepts)" },
+        long_text: { type: "string", description: "Optional text attachment of up to 10,000 characters shown with the post; not allowed on a poll" },
+        long_text_link: { type: "string", description: "Optional link inside the long text attachment; not together with link" },
+        spoiler_phrases: { type: "array", items: { type: "string" }, maxItems: 10, description: "Optional: up to 10 exact phrases from the text to hide as spoilers" },
+        ghost: { type: "boolean", description: "true = ghost post: Threads archives it after 24 hours, and it can carry only text and text spoilers" },
+        ...POST_OPTIONS
       },
       required: ["text"]
     }
@@ -41,7 +61,10 @@ export const TOOLS = [
       properties: {
         media_urls: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 20, description: "Public URLs of the images (JPEG/PNG, max 8 MB) and videos (MP4/MOV, max 5 minutes)" },
         text: { type: "string", description: "Optional post text" },
-        media_type: { type: "string", enum: ["IMAGE", "VIDEO"], description: "Optional. By default a .mp4/.mov/.m4v URL is a video and anything else an image" }
+        media_type: { type: "string", enum: ["IMAGE", "VIDEO"], description: "Optional. By default a .mp4/.mov/.m4v URL is a video and anything else an image" },
+        alt_texts: { type: "array", items: { type: "string" }, description: "Optional alt text for each image or video, in the same order (max 1,000 characters each)" },
+        spoiler: { type: "boolean", description: "true = blur the media as a spoiler until tapped" },
+        ...POST_OPTIONS
       },
       required: ["media_urls"]
     }
@@ -141,6 +164,14 @@ export const TOOLS = [
     }
   },
   {
+    name: "get_my_replies",
+    description: "The replies you have written on Threads, newest first",
+    inputSchema: {
+      type: "object",
+      properties: { limit: LIMIT(100) }
+    }
+  },
+  {
     name: "search_threads",
     description: "Search public Threads posts by keyword or topic tag. Until Meta approves the app for threads_keyword_search it only searches your own posts. 2,200 searches a day",
     inputSchema: {
@@ -154,6 +185,27 @@ export const TOOLS = [
         limit: { type: "number", description: "How many results (default 10, max 100)" }
       },
       required: ["query"]
+    }
+  },
+  {
+    name: "lookup_profile",
+    description: "Look up another public Threads profile by its exact username: bio, followers, and its views, likes, quotes and reposts over the past 7 days. Needs the threads_profile_discovery permission; until Meta grants advanced access it only finds @meta, @threads, @instagram and @facebook. Only profiles with 100+ followers; 1,000 lookups a day",
+    inputSchema: {
+      type: "object",
+      properties: { username: { type: "string", description: "The exact username, with or without @" } },
+      required: ["username"]
+    }
+  },
+  {
+    name: "search_locations",
+    description: "Find a place to tag in a post: pass its ID as location_id. Needs the threads_location_tagging permission; until Meta approves it, every search returns results for Menlo Park only. 500 searches a day",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The place name, e.g. 'Lahore' or 'Packages Mall'" },
+        latitude: { type: "number", description: "Optional latitude, to search near a point (give longitude too)" },
+        longitude: { type: "number", description: "Optional longitude, to search near a point (give latitude too)" }
+      }
     }
   },
   {
@@ -174,12 +226,21 @@ export const TOOLS = [
   },
   {
     name: "get_thread_insights",
-    description: "A thread's insights: views, likes, replies, reposts, quotes",
+    description: "A thread's insights: views, likes, replies, reposts, quotes and shares",
     inputSchema: {
       type: "object",
       properties: {
         thread_id: THREAD_ID
       },
+      required: ["thread_id"]
+    }
+  },
+  {
+    name: "get_poll_results",
+    description: "The votes on one of your Threads polls: each answer's share, total votes and when voting closes",
+    inputSchema: {
+      type: "object",
+      properties: { thread_id: THREAD_ID },
       required: ["thread_id"]
     }
   },
@@ -193,6 +254,67 @@ export const TOOLS = [
 const ok = text => ({ content: [{ type: "text", text }] });
 const clamp = (n, lo, hi, fallback) => Math.min(hi, Math.max(lo, Math.round(Number(n)) || fallback));
 const isVideo = url => /\.(mp4|mov|m4v)([?#]|$)/i.test(url);
+
+// The POST_OPTIONS a caller set, as container parameters. Throws before anything is sent.
+function postOptions(args) {
+  const out = {};
+  if (args.reply_control !== undefined) {
+    const control = String(args.reply_control).toLowerCase();
+    if (!REPLY_CONTROLS.includes(control)) throw new Error(`reply_control must be one of ${REPLY_CONTROLS.join(", ")}`);
+    out.reply_control = control;
+  }
+  if (args.reply_approvals) out.enable_reply_approvals = true;
+  if (args.location_id) out.location_id = String(args.location_id);
+  if (args.countries !== undefined) {
+    const codes = (Array.isArray(args.countries) ? args.countries : String(args.countries).split(","))
+      .map(c => String(c ?? "").trim().toUpperCase()).filter(Boolean);
+    const bad = codes.find(c => !/^[A-Z]{2}$/.test(c));
+    if (!codes.length || bad !== undefined) throw new Error(`countries must be 2-letter codes such as PK or US${bad !== undefined ? `, not "${bad}"` : ""}`);
+    out.allowlisted_country_codes = codes.join(",");
+  }
+  if (args.share_to_instagram) out.crossreshare_to_ig = true;
+  return out;
+}
+
+// A text post's poll, GIF, text attachment, spoilers and ghost flag, checked against Threads' rules.
+function textExtras(args) {
+  const out = {};
+  if (args.poll_options !== undefined) {
+    const options = (Array.isArray(args.poll_options) ? args.poll_options : []).map(o => String(o ?? "").trim());
+    if (options.length < 2 || options.length > 4) throw new Error(`a poll takes 2 to 4 options, not ${options.length}`);
+    const bad = options.find(o => !o || o.length > 25);
+    if (bad !== undefined) throw new Error(`each poll option must be 1 to 25 characters: "${bad}"`);
+    out.poll_attachment = JSON.stringify(Object.fromEntries(options.map((o, i) => [`option_${"abcd"[i]}`, o])));
+  }
+  if (args.gif_id) out.gif_attachment = JSON.stringify({ gif_id: String(args.gif_id), provider: "GIPHY" });
+  if (args.long_text !== undefined) {
+    const plaintext = String(args.long_text);
+    if (!plaintext.trim() || plaintext.length > 10000) throw new Error("long_text must be 1 to 10,000 characters");
+    if (out.poll_attachment) throw new Error("Threads does not allow a long text attachment on a post with a poll");
+    if (args.long_text_link && args.link) throw new Error("use link or long_text_link, not both: Threads allows one link attachment per post");
+    out.text_attachment = JSON.stringify({ plaintext, ...(args.long_text_link ? { link_attachment_url: String(args.long_text_link) } : {}) });
+  }
+  const phrases = Array.isArray(args.spoiler_phrases) ? args.spoiler_phrases : [];
+  if (phrases.length > 10) throw new Error("Threads allows at most 10 spoilers per post");
+  if (phrases.length) {
+    const text = String(args.text ?? "");
+    out.text_entities = JSON.stringify(phrases.map(p => {
+      const phrase = String(p ?? "");
+      const offset = phrase ? text.indexOf(phrase) : -1;
+      if (offset < 0) throw new Error(`spoiler "${phrase}" is not in the post text`);
+      return { entity_type: "SPOILER", offset, length: phrase.length };
+    }));
+  }
+  if (args.ghost) {
+    if (out.poll_attachment || out.gif_attachment || out.text_attachment || args.link) {
+      throw new Error("a ghost post can carry only text and text spoilers: no poll, GIF, link or long text");
+    }
+    out.is_ghost_post = true;
+  }
+  return out;
+}
+
+const percent = v => (typeof v === "number" ? `${Math.round(v <= 1 ? v * 100 : v)}%` : "?");
 
 // A metric's number: total_value for a total, the sum of the days for a time series (views), the sum over links for clicks.
 function metricValue(m) {
@@ -281,7 +403,8 @@ export function createThreads({
   return async function callTool(name, args = {}) {
     try {
       if (name === "post_to_threads") {
-        return posted(await postThread({ media_type: "TEXT", text: args.text, topic_tag: args.topic_tag, link_attachment: args.link }), "Thread posted");
+        const params = { media_type: "TEXT", text: args.text, topic_tag: args.topic_tag, link_attachment: args.link, ...textExtras(args), ...postOptions(args) };
+        return posted(await postThread(params), args.ghost ? "Ghost post published (Threads archives it after 24 hours)" : "Thread posted");
       }
 
       if (name === "reply_to_thread") {
@@ -297,21 +420,28 @@ export function createThreads({
         if (urls.length < 1 || urls.length > 20) throw new Error("media_urls needs 1 to 20 public URLs");
         const local = urls.find(u => !/^https?:\/\//i.test(String(u)));
         if (local) throw new Error(`Threads downloads the media itself, so it needs a public http(s) URL; "${local}" is not one`);
-        const media = url => ((args.media_type || (isVideo(url) ? "VIDEO" : "IMAGE")) === "VIDEO"
-          ? { media_type: "VIDEO", video_url: url }
-          : { media_type: "IMAGE", image_url: url });
+        const alts = Array.isArray(args.alt_texts) ? args.alt_texts.map(a => String(a ?? "")) : [];
+        if (alts.some(a => a.length > 1000)) throw new Error("each alt text can be at most 1,000 characters");
+        // checked before the first container is made
+        const extras = { ...(args.spoiler ? { is_spoiler_media: true } : {}), ...postOptions(args) };
+        const media = (url, i) => ({
+          ...((args.media_type || (isVideo(url) ? "VIDEO" : "IMAGE")) === "VIDEO"
+            ? { media_type: "VIDEO", video_url: url }
+            : { media_type: "IMAGE", image_url: url }),
+          ...(alts[i] ? { alt_text: alts[i] } : {})
+        });
         const deadline = now() + waitMs;
         if (urls.length === 1) {
-          const container = await tapi(`/${userId}/threads`, { ...media(urls[0]), text: args.text }, "POST");
+          const container = await tapi(`/${userId}/threads`, { ...media(urls[0], 0), text: args.text, ...extras }, "POST");
           return posted(await publish(container.id, deadline), "Media post published");
         }
         const children = [];
-        for (const url of urls) {
-          children.push((await tapi(`/${userId}/threads`, { ...media(url), is_carousel_item: true }, "POST")).id);
+        for (const [i, url] of urls.entries()) {
+          children.push((await tapi(`/${userId}/threads`, { ...media(url, i), is_carousel_item: true }, "POST")).id);
         }
         // a child that fails stops here; one still processing at the deadline is left to the carousel container
         for (const child of children) await ready(child, deadline);
-        const carousel = await tapi(`/${userId}/threads`, { media_type: "CAROUSEL", children: children.join(","), text: args.text }, "POST");
+        const carousel = await tapi(`/${userId}/threads`, { media_type: "CAROUSEL", children: children.join(","), text: args.text, ...extras }, "POST");
         return posted(await publish(carousel.id, deadline), `Carousel of ${children.length} published`);
       }
 
@@ -364,6 +494,39 @@ export function createThreads({
       if (name === "get_mentions") {
         const data = await tapi(`/${userId}/mentions`, { fields: "id,text,username,permalink,timestamp", limit: clamp(args.limit, 1, 100, 25) });
         return ok(listPosts(data, "No mentions found"));
+      }
+
+      if (name === "get_my_replies") {
+        const data = await tapi(`/${userId}/replies`, { fields: "id,text,permalink,timestamp", limit: clamp(args.limit, 1, 100, 25) });
+        return ok(listPosts(data, "You have not replied to anything yet"));
+      }
+
+      if (name === "lookup_profile") {
+        const username = String(args.username ?? "").trim().replace(/^@/, "");
+        if (!username) throw new Error("username is required");
+        const p = await tapi("/profile_lookup", { username });
+        return ok([
+          `👤 @${p.username || username}${p.name ? ` (${p.name})` : ""}${p.is_verified ? " ✔️ verified" : ""}`,
+          `📝 ${p.biography || ""}`,
+          `👥 Followers: ${p.follower_count ?? "?"}`,
+          `📈 Past 7 days: views ${p.views_count ?? "?"}, likes ${p.likes_count ?? "?"}, quotes ${p.quotes_count ?? "?"}, reposts ${p.reposts_count ?? "?"}`
+        ].join("\n"));
+      }
+
+      if (name === "search_locations") {
+        const near = args.latitude !== undefined && args.longitude !== undefined
+          && Number.isFinite(Number(args.latitude)) && Number.isFinite(Number(args.longitude));
+        if (!args.query && !near) throw new Error("give a query, or both latitude and longitude");
+        const data = await tapi("/location_search", {
+          q: args.query,
+          ...(near ? { latitude: Number(args.latitude), longitude: Number(args.longitude) } : {}),
+          fields: "id,name,address,city,country"
+        });
+        const list = (data.data || []).map(l => {
+          const where = [l.address, l.city, l.country].filter(Boolean).join(", ");
+          return `📍 ${l.name}${where ? ` (${where})` : ""}\nID: ${l.id}`;
+        }).join("\n---\n");
+        return ok(list || "No places found");
       }
 
       if (name === "search_threads") {
@@ -428,10 +591,24 @@ export function createThreads({
 
       if (name === "get_thread_insights") {
         const data = await tapi(`/${args.thread_id}/insights`, {
-          metric: "views,likes,replies,reposts,quotes"
+          metric: "views,likes,replies,reposts,quotes,shares"
         });
         const metrics = data.data?.map(m => `${m.name}: ${m.values?.[0]?.value ?? m.total_value?.value ?? 0}`).join("\n") || "No insights";
         return ok(metrics);
+      }
+
+      if (name === "get_poll_results") {
+        const data = await tapi(`/${args.thread_id}`, { fields: POLL_FIELDS });
+        const poll = data.poll_attachment;
+        if (!poll) return ok(`${args.thread_id} has no poll`);
+        const answers = ["a", "b", "c", "d"].filter(k => poll[`option_${k}`])
+          .map(k => `• ${poll[`option_${k}`]}: ${percent(poll[`option_${k}_votes_percentage`])}`);
+        return ok([
+          `📊 ${data.text ? data.text.substring(0, 100) : "Poll"}`,
+          ...answers,
+          `🗳️ Total votes: ${poll.total_votes ?? 0}`,
+          `⏰ Voting closes: ${poll.expiration_timestamp || "?"}`
+        ].join("\n"));
       }
 
       if (name === "check_token") {
